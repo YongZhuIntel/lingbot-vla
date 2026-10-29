@@ -173,6 +173,36 @@ def our_eager_attention_forward(
     return att_output
 
 
+def sdpa_attention_forward(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    attention_mask: torch.Tensor,
+):
+    """
+    Performs attention with F.scaled_dot_product_attention, for devices without FlexAttention (e.g. xpu).
+    Same inputs and outputs as `our_eager_attention_forward`, computed in float32 like `flex_attention_forward`.
+    """
+    bsize, seq_len, num_att_heads, head_dim = query_states.shape
+    original_dtype = query_states.dtype
+
+    query_states, key_states, value_states = (
+        x.transpose(1, 2).to(torch.float32) for x in (query_states, key_states, value_states)
+    )
+    attention_mask = attention_mask[:, None, :, : key_states.shape[2]]
+    # rows without any visible key (padding queries) give NaN in SDPA, output zeros for them like flex attention
+    empty_rows = ~attention_mask.any(dim=-1, keepdim=True)
+    attention_mask = attention_mask | empty_rows
+
+    att_output = F.scaled_dot_product_attention(
+        query_states, key_states, value_states, attn_mask=attention_mask, enable_gqa=True
+    )
+    att_output = att_output.masked_fill(empty_rows, 0.0).to(original_dtype)
+    att_output = att_output.transpose(1, 2).reshape(bsize, seq_len, num_att_heads * head_dim)
+
+    return att_output
+
+
 # @torch.jit.script
 def apply_rope(
     x: torch.Tensor,

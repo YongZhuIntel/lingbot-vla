@@ -35,7 +35,7 @@ from ..distributed.parallel_state import get_parallel_state
 from . import logging
 from .count_flops import LingBotFlopsCounter
 from .dist_utils import all_reduce
-from .import_utils import is_torch_npu_available
+from .import_utils import get_torch_device, is_torch_npu_available
 from .seqlen_pos_transform_utils import culen2len, pos2culen
 
 
@@ -155,9 +155,9 @@ class EnvironMeter:
         self.consume_tokens += batch_tokens
 
         # cuda memory
-        allocated_memory = torch.cuda.max_memory_allocated()
-        reserved_memory = torch.cuda.max_memory_reserved()
-        num_alloc_retries = torch.cuda.memory_stats()["num_alloc_retries"]
+        allocated_memory = get_torch_device().max_memory_allocated()
+        reserved_memory = get_torch_device().max_memory_reserved()
+        num_alloc_retries = get_torch_device().memory_stats().get("num_alloc_retries", 0)
         allocated_memory, reserved_memory, num_alloc_retries = all_reduce(
             (allocated_memory, reserved_memory, num_alloc_retries), op="max"
         )
@@ -238,8 +238,8 @@ def print_device_mem_info(prompt: str = "VRAM usage") -> None:
     """
     Logs VRAM info.
     """
-    memory_allocated = torch.cuda.memory_allocated() / (1024**3)
-    max_memory_allocated = torch.cuda.max_memory_allocated() / (1024**3)
+    memory_allocated = get_torch_device().memory_allocated() / (1024**3)
+    max_memory_allocated = get_torch_device().max_memory_allocated() / (1024**3)
     logger.info_rank0(f"{prompt}: cur {memory_allocated:.2f}GB, max {max_memory_allocated:.2f}GB.")
 
 
@@ -259,8 +259,8 @@ def empty_cache() -> None:
     Collects system memory.
     """
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    if get_torch_device().is_available():
+        get_torch_device().empty_cache()
 
 
 def get_cache_dir(path: Optional[str] = None) -> str:
@@ -333,7 +333,7 @@ def dict2device(input_dict: dict):
     output_dict = {}
     for k, v in input_dict.items():
         if isinstance(v, torch.Tensor):
-            output_dict[k] = v.cuda()
+            output_dict[k] = v.to(get_torch_device().current_device())
         elif isinstance(v, dict):
             output_dict[k] = dict2device(v)
         else:

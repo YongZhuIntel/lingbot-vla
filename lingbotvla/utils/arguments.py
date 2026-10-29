@@ -570,7 +570,8 @@ class TrainingArguments:
                 f"`global_batch_size` should be a multiple of {self.micro_batch_size * self.data_parallel_size}."
             )
 
-        if self.gradient_accumulation_steps > 1 and self.enable_fsdp_offload:
+        # fsdp2 accumulates offloaded gradients on cpu, only fsdp1 lacks support
+        if self.gradient_accumulation_steps > 1 and self.enable_fsdp_offload and self.data_parallel_mode == "fsdp1":
             raise ValueError("Gradient accumulation is not supported with FSDP offload.")
 
         self.dataloader_batch_size = self.global_batch_size // self.data_parallel_size  # = micro bsz * grad accu

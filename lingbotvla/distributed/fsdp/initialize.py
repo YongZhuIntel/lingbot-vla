@@ -26,6 +26,7 @@ from safetensors.torch import load_file
 from torch.distributed._tensor import Replicate, Shard
 
 from ...utils import logging
+from ...utils.import_utils import get_torch_device
 from ..parallel_plan import SpecInfo
 
 
@@ -67,7 +68,7 @@ def parallel_load_safetensors(
     ckpt_chunks = [ckpt_chunks[i * size : (i + 1) * size] for i in range(world_size)]
 
     shard_states = {}
-    device = torch.cuda.current_device()
+    device = get_torch_device().current_device()
     for rank, files in enumerate(ckpt_chunks):
         if rank == dist.get_rank():
             for file in files:
@@ -131,7 +132,7 @@ def parallel_init_fsdp_fn(
         Returns:
             torch.Tensor: The full tensor.
         """
-        device = torch.cuda.current_device()
+        device = get_torch_device().current_device()
         if isinstance(spec_info.placement, Replicate):
             return torch.empty_like(param.data, device=device)
         else:
@@ -172,7 +173,7 @@ def parallel_init_fsdp_fn(
         Returns:
             torch.Tensor: The synchronized state tensor.
         """
-        device = torch.cuda.current_device()
+        device = get_torch_device().current_device()
         if is_param:
             param = torch.nn.Parameter(torch.empty_like(state.data, device=device), requires_grad=state.requires_grad)
         else:  # buffer

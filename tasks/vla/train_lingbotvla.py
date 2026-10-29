@@ -30,6 +30,7 @@ from lingbotvla.utils import helper
 from lingbotvla.utils.ema import ema_update
 from lingbotvla.utils.arguments import DataArguments, ModelArguments, TrainingArguments, parse_args, save_args
 from lingbotvla.utils.dist_utils import all_reduce
+from lingbotvla.utils.import_utils import get_device_type, get_torch_device
 
 from lingbotvla.models.vla.vision_models.module_utils import build_depth_model, get_depth_target, log_depth
 
@@ -227,8 +228,10 @@ def main():
     args = parse_args(Arguments)
     logger.info(f"Process rank: {args.train.global_rank}, world size: {args.train.world_size}")
     logger.info_rank0(json.dumps(asdict(args), indent=2))
-    torch.cuda.set_device(f"cuda:{args.train.local_rank}")
-    dist.init_process_group(backend="nccl")
+    device_type = get_device_type()
+    get_torch_device().set_device(f"{device_type}:{args.train.local_rank}")
+    # gloo serves cpu tensors, e.g. grad norm of fsdp cpu-offloaded gradients
+    dist.init_process_group(backend="cpu:gloo,xpu:xccl" if device_type == "xpu" else "nccl")
     helper.set_seed(args.train.seed, args.train.enable_full_determinism)
     if args.train.local_rank == 0:
         helper.enable_third_party_logging()
@@ -551,19 +554,19 @@ def main():
             total_depth_loss = 0
             depth_targets = None
             depth_preds = None
-            torch.cuda.synchronize()
+            get_torch_device().synchronize()
             start_time = time.time()
             for micro_batch in micro_batches:
                 dataset_names = micro_batch.pop('rep_id', None)
                 environ_meter.add(micro_batch)
 
                 micro_batch = {
-                    k: v.cuda(non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in micro_batch.items()
+                    k: v.to(device_type, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in micro_batch.items()
                 }
                 depth_forward_time = 0
                 if use_depth_align:
                     with torch.no_grad():
-                        with torch.autocast("cuda", dtype=torch.bfloat16):
+                        with torch.autocast(device_type, dtype=torch.bfloat16):
                             pil_images = micro_batch.pop('pil_images', None)
                             depth_targets, cls_token = get_depth_target(depth_model_type, (moge_model, morgbd_model), pil_images)
 
@@ -603,7 +606,7 @@ def main():
             total_loss, total_vla_loss, total_depth_loss, grad_norm = all_reduce((total_loss, total_vla_loss, total_depth_loss, grad_norm), group=get_parallel_state().fsdp_group)
             if model_ema is not None:
                 ema_update(model_ema, model, args.train.ema_rate)
-            torch.cuda.synchronize()
+            get_torch_device().synchronize()
             delta_time = time.time() - start_time
             lr = max(lr_scheduler.get_last_lr())
             data_loader_tqdm.update()
@@ -763,7 +766,7 @@ def main():
                             save_model_weights(ema_hf_weights_path, ema_model_state_dict, model_assets=model_assets)
                         logger.info_rank0(f"Huggingface EMA checkpoint saved at {ema_hf_weights_path} successfully!")
 
-    torch.cuda.synchronize()
+    get_torch_device().synchronize()
     # release memory
     del optimizer, lr_scheduler
     helper.empty_cache()

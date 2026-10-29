@@ -17,6 +17,7 @@ import torch
 from transformers import PretrainedConfig
 
 from . import logging
+from .import_utils import get_torch_device
 
 
 logger = logging.get_logger(__name__)
@@ -33,7 +34,7 @@ def get_device_flops(unit="T"):
             ptr += 1
         return number
 
-    device_name = torch.cuda.get_device_name()
+    device_name = get_torch_device().get_device_name()
     flops = float("inf")  # INF flops for unkown gpu type
     if "H100" in device_name or "H800" in device_name or "NVIDIA L20X" in device_name:
         flops = 989e12

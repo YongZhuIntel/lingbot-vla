@@ -41,6 +41,7 @@ from transformers.modeling_flash_attention_utils import FlashAttentionKwargs, is
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.processing_utils import Unpack
 import torch.distributed._tensor as dt
+from lingbotvla.utils.import_utils import is_flash_attn_2_available
 from .qwenvl_in_vla import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel
 
 try:
@@ -56,7 +57,7 @@ from .utils import (
     resize_with_pad,
     sample_beta,
 )
-from .utils import apply_rope, our_eager_attention_forward
+from .utils import apply_rope, our_eager_attention_forward, sdpa_attention_forward
 from .flex_attention import flex_attention_forward
 
 logger = logging.get_logger(__name__)
@@ -1052,9 +1053,9 @@ class QwenvlWithExpertConfig(PretrainedConfig):
                 "You set `freeze_vision_encoder=False` and `train_expert_only=True` which are not compatible."
             )
 
-        if self.attention_implementation not in ["eager", "fa2", "flex"]:
+        if self.attention_implementation not in ["eager", "fa2", "flex", "sdpa"]:
             raise ValueError(
-                f"Wrong value provided for `attention_implementation` ({self.attention_implementation}). Expected 'eager', 'fa2' or 'flex'."
+                f"Wrong value provided for `attention_implementation` ({self.attention_implementation}). Expected 'eager', 'fa2', 'flex' or 'sdpa'."
             )
 
 class OldAdaRMSNorm(nn.Module):
@@ -1244,11 +1245,15 @@ class QwenvlWithExpertModel(PreTrainedModel):
         vlm_config.norm_qkv = self.config.norm_qkv
         if self.config.vocab_size != 0 and self.config.vocab_size != 257152 and vlm_config.vocab_size != self.config.vocab_size:
             vlm_config.vocab_size = self.config.vocab_size
-        self.qwenvl = Qwen2_5_VLForConditionalGeneration._from_config(vlm_config, use_flash_attention_2=True)
+        attn_implementation = 'flash_attention_2' if is_flash_attn_2_available() else 'sdpa'
+        vlm_config._attn_implementation = attn_implementation
+        vlm_config.vision_config._attn_implementation = attn_implementation
+        self.qwenvl = Qwen2_5_VLForConditionalGeneration._from_config(vlm_config, attn_implementation=attn_implementation)
         if self.config.use_lm_head:
             self.qwenvl.tie_weights()
         self.config.qwen_expert_config.norm_qkv = self.config.norm_qkv
-        self.qwen_expert = Qwen2ForCausalLM._from_config(self.config.qwen_expert_config, use_flash_attention_2=True, eval=eval)
+        self.config.qwen_expert_config._attn_implementation = attn_implementation
+        self.qwen_expert = Qwen2ForCausalLM._from_config(self.config.qwen_expert_config, attn_implementation=attn_implementation, eval=eval)
 
         if getattr(self.config, 'adanorm_time', False):
             replace_lnorm_with_adanorm(self.qwen_expert, self.config.qwen_expert_config.hidden_size, self.config.qwen_expert_config.hidden_size, config.split_gate_liner, config.no_split_gate_liner, config.final_norm_adanorm, config.old_adanorm)
@@ -1485,13 +1490,15 @@ class QwenvlWithExpertModel(PreTrainedModel):
             attention_interface = flex_attention_forward
         elif self.config.attention_implementation == "eager":
             attention_interface = our_eager_attention_forward
+        elif self.config.attention_implementation == "sdpa":
+            attention_interface = sdpa_attention_forward
         elif self.config.attention_implementation == "xformer":
             # attention_interface = xformer_attention_forward
             raise NotImplementedError("Xformer attention is not implemented (yet)")
         else:
             raise ValueError(
                 f"Invalid attention implementation: {self.config.attention_implementation}. "
-                "Expected one of ['fa2', 'flex', 'eager', 'xformer']."
+                "Expected one of ['fa2', 'flex', 'eager', 'sdpa', 'xformer']."
             )
         return attention_interface
 

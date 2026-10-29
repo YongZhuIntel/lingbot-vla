@@ -34,6 +34,7 @@ from lingbotvla.models.vla.pi0.modeling_pi0 import PI0Policy
 from lingbotvla.models.vla.pi0.modeling_lingbot_vla import LingbotVlaPolicy
 from lingbotvla.data.vla_data.transform import Normalizer, prepare_images, prepare_language, prepare_state
 from lingbotvla.models import build_processor
+from lingbotvla.utils.import_utils import get_device_type
 
 
 def set_seed_everywhere(seed: int):
@@ -137,7 +138,7 @@ class PolicyPreprocessMixin:
         self, observation: dict[str, Tensor], use_bf16: bool = False, vlm_causal: bool = False, noise: Tensor | None = None
     ):
         self.eval()
-        device = 'cuda'
+        device = get_device_type()
         if use_bf16:
             dtype = torch.bfloat16
         else:
@@ -238,7 +239,7 @@ class QwenPiServer:
         self.task_description = None
         
         self.vla = self.load_vla(path_to_pi_model)
-        self.vla = self.vla.cuda().eval()
+        self.vla = self.vla.to(get_device_type()).eval()
         if use_bf16:
             self.vla = self.vla.to(torch.bfloat16)
         elif use_fp32:
@@ -338,7 +339,7 @@ class QwenPiServer:
 
         if path_to_pi_model is not None:
             self.vla = self.load_vla(path_to_pi_model)
-            self.vla = self.vla.cuda().eval()
+            self.vla = self.vla.to(get_device_type()).eval()
             if self.use_bf16:
                 self.vla = self.vla.to(torch.bfloat16)
             elif self.use_fp32:

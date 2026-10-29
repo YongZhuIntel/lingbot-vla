@@ -28,7 +28,7 @@ from torch.utils.checkpoint import create_selective_checkpoint_contexts, noop_co
 
 from ..models import load_model_weights
 from ..utils import logging
-from ..utils.import_utils import is_torch_version_greater_than
+from ..utils.import_utils import get_device_type, get_torch_device, is_torch_version_greater_than
 from .checkpoint import CheckpointFunction
 from .fsdp import (
     clip_grad_norm_,
@@ -42,7 +42,7 @@ from .utils import get_module_from_path, set_module_from_path
 
 
 if is_torch_version_greater_than("2.4"):
-    from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
+    from torch.distributed._composable.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
     from torch.distributed.tensor.parallel import parallelize_module
 
 
@@ -187,6 +187,11 @@ def build_parallelize_model(
                     ignored_modules.add(param)
                 mp_fsdp_kwargs["ignored_params"] = ignored_modules
 
+            if kwargs.pop("enable_fsdp_offload", False):
+                logger.info_rank0("Enable offloading for parameters & gradients & optimizer states.")
+                fsdp_kwargs["offload_policy"] = CPUOffloadPolicy()
+                mp_fsdp_kwargs["offload_policy"] = CPUOffloadPolicy()
+
             mp_fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
                     param_dtype=torch.bfloat16,
                     reduce_dtype=torch.float32,
@@ -219,17 +224,27 @@ def build_parallelize_model(
                     logger.debug(f"Sharding layer {i} ({layer.__class__.__name__})")
                     fully_shard(layer, **fsdp_kwargs)
 
+            # shard Qwen2.5-VL layers one by one, otherwise they all fall into the root FSDP unit
+            # and are all-gathered at once, which does not fit into device memory with cpu offload
+            for module in model.modules():
+                if module.__class__.__name__ in ("Qwen2_5_VLDecoderLayer", "Qwen2_5_VLVisionBlock"):
+                    fully_shard(module, **mp_fsdp_kwargs)
             fully_shard(model, **mp_fsdp_kwargs)
+            if get_device_type() == "xpu":
+                # oneCCL does not support ReduceOp.AVG, reduce with SUM and divide afterwards
+                for module in model.modules():
+                    if hasattr(module, "set_force_sum_reduction_for_comms"):
+                        module.set_force_sum_reduction_for_comms(True)
 
             if kwargs.get("init_device") == "meta":
                 if weights_path is None:
                     # shard init empty model with fsdp2
-                    model.to_empty(device="cuda")
+                    model.to_empty(device=get_device_type())
                     model.init_weights()
                 else:
                     from torch.distributed.tensor import distribute_tensor
 
-                    load_model_weights(model, weights_path, "cuda", dtensor_factory=distribute_tensor)
+                    load_model_weights(model, weights_path, get_device_type(), dtensor_factory=distribute_tensor)
 
         elif parallel_state.dp_mode == "fsdp1":
             wrap_policy = partial(
@@ -245,7 +260,7 @@ def build_parallelize_model(
             fsdp_kwargs = {
                 "auto_wrap_policy": wrap_policy,
                 "ignored_states": fsdp_no_shard_states,
-                "device_id": torch.cuda.current_device(),
+                "device_id": get_torch_device().current_device(),
                 "sharding_strategy": strategy if enable_full_shard else ShardingStrategy.NO_SHARD,
                 "use_orig_params": True,
             }
@@ -270,7 +285,7 @@ def build_parallelize_model(
                 logger.info_rank0("Enable rank0-only initialization.")
                 fsdp_kwargs["sync_module_states"] = True
                 if parallel_state.global_rank != 0:
-                    fsdp_kwargs["param_init_fn"] = init_fsdp_fn(model, device="cuda")
+                    fsdp_kwargs["param_init_fn"] = init_fsdp_fn(model, device=get_device_type())
             elif kwargs.get("init_device") == "meta":
                 # assert weights_path is not None, "`weights_path` must be provided when `init_device=meta` for fsdp1."
 

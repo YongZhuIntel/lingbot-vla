@@ -65,6 +65,34 @@ def is_torch_npu_available() -> bool:
     return _PACKAGE_FLAGS["torch_npu"]
 
 
+@lru_cache
+def is_torch_xpu_available() -> bool:
+    import torch
+
+    return hasattr(torch, "xpu") and torch.xpu.is_available()
+
+
+@lru_cache
+def get_device_type() -> str:
+    """
+    Returns the accelerator device type: `npu`, `xpu` or `cuda`.
+    """
+    if is_torch_npu_available():
+        return "npu"
+    if is_torch_xpu_available():
+        return "xpu"
+    return "cuda"
+
+
+def get_torch_device():
+    """
+    Returns the torch device module of the accelerator, e.g. `torch.cuda` or `torch.xpu`.
+    """
+    import torch
+
+    return getattr(torch, get_device_type())
+
+
 def is_vescale_available() -> bool:
     return _PACKAGE_FLAGS["vescale"]
 

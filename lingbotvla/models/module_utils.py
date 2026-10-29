@@ -32,6 +32,7 @@ from transformers.utils.import_utils import is_safetensors_available
 
 from ..utils import logging
 from ..utils.helper import empty_cache, get_dtype_size
+from ..utils.import_utils import get_device_type, get_torch_device
 
 
 if is_safetensors_available():
@@ -238,6 +239,8 @@ def load_model_weights(
     if expert_vision_path is not None or enable_expert_vision:
         dino_parameter_names = {name for name, _ in model.model.qwenvl_with_expert.expert_visual.named_parameters()}
         print(f'====dino contains {len(dino_parameter_names)} paras=====')
+    if init_device == "cuda":  # `cuda` stands for the accelerator, e.g. npu or xpu
+        init_device = get_device_type()
     model.to_empty(device=init_device)
     if post_training:
         logger.info_rank0(f">>> Doing Post-Training now, no need to load LLM's embedding weight.")
@@ -450,7 +453,7 @@ def save_model_weights(
 
             empty_cache()
             if global_rank is not None and dist.is_initialized():  # avoid process hanging
-                torch.cuda.synchronize()
+                get_torch_device().synchronize()
                 dist.barrier()
 
         if global_rank is None or global_rank == 0:

@@ -25,6 +25,7 @@ from transformers import (
 from lerobot.configs.policies import PreTrainedConfig
 from ..distributed.parallel_state import get_parallel_state
 from ..utils import logging
+from ..utils.import_utils import get_device_type
 from .loader import BaseModelLoader, get_loader
 
 if TYPE_CHECKING:
@@ -89,7 +90,8 @@ def build_foundation_model(
     config.final_norm_adanorm = config_kwargs['final_norm_adanorm']
     config.freeze_vision_encoder = freeze_vision_encoder
     config.tokenizer_max_length = tokenizer_max_length
-    config.attention_implementation = 'flex' # TODO
+    # FlexAttention does not support xpu yet
+    config.attention_implementation = 'sdpa' if get_device_type() == 'xpu' else 'flex'
     config.enable_expert_vision = config_kwargs['enable_expert_vision']
     config.expert_vision_type = config_kwargs['expert_vision_type']
     config.action_dim = config_kwargs['action_dim']
@@ -130,7 +132,9 @@ def build_foundation_model(
         "trust_remote_code": True,
     }
 
-    if (init_device == "cpu" and get_parallel_state().global_rank != 0) or init_device == "meta":
+    # rank0-only cpu init relies on fsdp1 sync_module_states, fsdp2 loads weights on every rank and shards them
+    parallel_state = get_parallel_state()
+    if (init_device == "cpu" and parallel_state.global_rank != 0 and parallel_state.dp_mode != "fsdp2") or init_device == "meta":
         empty_init = True
     else:
         empty_init = False
