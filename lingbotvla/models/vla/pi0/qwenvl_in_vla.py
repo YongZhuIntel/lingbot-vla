@@ -127,6 +127,13 @@ class Qwen2_5_VLPatchMerger(nn.Module):
         return x
 
 
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
 def apply_rotary_pos_emb_flashatt(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -246,8 +253,42 @@ def apply_rotary_pos_emb_vision(
     return q_embed, k_embed
 
 
+class Qwen2_5_VLVisionSdpaAttention(Qwen2_5_VLVisionAttention):
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rotary_pos_emb: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        seq_length = hidden_states.shape[0]
+        q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+        if position_embeddings is None:
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+        else:
+            cos, sin = position_embeddings
+        q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        # attend within each [cu_seqlens[i-1], cu_seqlens[i]) segment, same as flash_attn_varlen_func
+        lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
+        q, k, v = (x.transpose(0, 1) for x in (q, k, v))  # [num_heads, seq_length, head_dim]
+        attn_output = torch.cat(
+            [
+                F.scaled_dot_product_attention(qi, ki, vi) if qi.shape[1] > 0 else qi
+                for qi, ki, vi in zip(q.split(lengths, dim=1), k.split(lengths, dim=1), v.split(lengths, dim=1))
+            ],
+            dim=1,
+        )
+        attn_output = attn_output.transpose(0, 1).reshape(seq_length, -1)
+        attn_output = self.proj(attn_output)
+        return attn_output
+
+
 QWEN2_5_VL_VISION_ATTENTION_CLASSES = {
     "eager": Qwen2_5_VLVisionAttention,
+    "sdpa": Qwen2_5_VLVisionSdpaAttention,
     "flash_attention_2": Qwen2_5_VLVisionFlashAttention2,
 }
 
@@ -810,6 +851,7 @@ class Qwen2MLP(nn.Module):
 
 QWEN2_5_VL_ATTENTION_CLASSES = {
     "eager": Qwen2_5_VLAttention,
+    "sdpa": Qwen2_5_VLAttention,
     "flash_attention_2": Qwen2_5_VLFlashAttention2,
 }
 

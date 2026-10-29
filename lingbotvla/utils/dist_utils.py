@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, Callable, List, Literal, Optional, Union
 import torch
 from torch import distributed as dist
 
+from .import_utils import get_device_type
+
 
 if TYPE_CHECKING:
     from torch.distributed import ProcessGroup
@@ -29,7 +31,7 @@ def all_gather(tensor: "torch.Tensor", world_size: int) -> "torch.Tensor":
     """
     Gathers the tensor from all ranks and concats them along the first dim.
     """
-    output_tensor = torch.empty(world_size * tensor.numel(), dtype=tensor.dtype, device="cuda")
+    output_tensor = torch.empty(world_size * tensor.numel(), dtype=tensor.dtype, device=get_device_type())
     dist.all_gather_into_tensor(output_tensor, tensor)
     return output_tensor.view(-1, *tensor.size()[1:])
 
@@ -43,7 +45,7 @@ def all_reduce(
     Performs all reduce in the given process group.
     """
     if not isinstance(data, torch.Tensor):
-        data = torch.tensor(data, dtype=torch.float, device="cuda")
+        data = torch.tensor(data, dtype=torch.float, device=get_device_type())
 
     reduce_ops = {"mean": dist.ReduceOp.SUM, "sum": dist.ReduceOp.SUM, "max": dist.ReduceOp.MAX}
     dist.all_reduce(data, op=reduce_ops[op], group=group)

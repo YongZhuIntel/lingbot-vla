@@ -28,7 +28,7 @@ from torch.utils.checkpoint import create_selective_checkpoint_contexts, noop_co
 
 from ..models import load_model_weights
 from ..utils import logging
-from ..utils.import_utils import is_torch_version_greater_than
+from ..utils.import_utils import get_device_type, get_torch_device, is_torch_version_greater_than
 from .checkpoint import CheckpointFunction
 from .fsdp import (
     clip_grad_norm_,
@@ -434,12 +434,12 @@ def build_parallelize_model(
             if kwargs.get("init_device") == "meta":
                 if weights_path is None:
                     # shard init empty model with fsdp2
-                    model.to_empty(device="cuda")
+                    model.to_empty(device=get_device_type())
                     model.init_weights()
                 else:
                     from torch.distributed.tensor import distribute_tensor
 
-                    load_model_weights(model, weights_path, "cuda", dtensor_factory=distribute_tensor)
+                    load_model_weights(model, weights_path, get_device_type(), dtensor_factory=distribute_tensor)
             llm_layers, llm_path = _resolve(model.model.qwenvl_with_expert.qwenvl, [
                 ("model", "layers"),                      # transformers 4.5x
                 ("language_model", "model", "layers"),    # 旧版本兼容
@@ -468,7 +468,7 @@ def build_parallelize_model(
             fsdp_kwargs = {
                 "auto_wrap_policy": wrap_policy,
                 "ignored_states": fsdp_no_shard_states,
-                "device_id": torch.cuda.current_device(),
+                "device_id": get_torch_device().current_device(),
                 "sharding_strategy": strategy if enable_full_shard else ShardingStrategy.NO_SHARD,
                 "use_orig_params": True,
             }
@@ -493,7 +493,7 @@ def build_parallelize_model(
                 logger.info_rank0("Enable rank0-only initialization.")
                 fsdp_kwargs["sync_module_states"] = True
                 if parallel_state.global_rank != 0:
-                    fsdp_kwargs["param_init_fn"] = init_fsdp_fn(model, device="cuda")
+                    fsdp_kwargs["param_init_fn"] = init_fsdp_fn(model, device=get_device_type())
             elif kwargs.get("init_device") == "meta":
                 # assert weights_path is not None, "`weights_path` must be provided when `init_device=meta` for fsdp1."
 

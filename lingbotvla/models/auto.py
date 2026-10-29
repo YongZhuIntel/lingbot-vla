@@ -25,6 +25,7 @@ from transformers import (
 from lerobot.configs.policies import PreTrainedConfig
 from ..distributed.parallel_state import get_parallel_state
 from ..utils import logging
+from ..utils.import_utils import get_device_type
 from .loader import BaseModelLoader, get_loader
 
 if TYPE_CHECKING:
@@ -89,7 +90,8 @@ def build_foundation_model(
     config.freeze_vision_encoder = freeze_vision_encoder
     config.tokenizer_max_length = tokenizer_max_length
     config.use_cache = False # drop kv cache during training
-    config.attention_implementation = 'flex'
+    # FlexAttention does not support xpu yet
+    config.attention_implementation = 'sdpa' if get_device_type() == 'xpu' else 'flex'
     config.action_dim = config_kwargs['action_dim']
     config.max_action_dim = config_kwargs['max_action_dim']
     config.max_state_dim = config_kwargs['max_state_dim']

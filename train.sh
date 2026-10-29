@@ -3,7 +3,13 @@
 set -x
 
 export TOKENIZERS_PARALLELISM=false
-if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+if [ -n "$ZE_AFFINITY_MASK" ]; then
+  # 可见 Intel XPU 数量
+  NPROC_PER_NODE=$(echo $ZE_AFFINITY_MASK | tr ',' '\n' | wc -l)
+elif [ -z "$CUDA_VISIBLE_DEVICES" ] && ! command -v nvidia-smi >/dev/null; then
+  # 没有 nvidia-smi 时按 Intel XPU 计数
+  NPROC_PER_NODE=$(python -c "import torch; print(torch.xpu.device_count())")
+elif [ -z "$CUDA_VISIBLE_DEVICES" ]; then
   NPROC_PER_NODE=$(nvidia-smi -L | wc -l)
 else
   # 可见 GPU 数量

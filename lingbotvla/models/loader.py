@@ -23,7 +23,7 @@ from transformers.modeling_utils import no_init_weights
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 
 from ..utils import logging
-from ..utils.import_utils import is_torch_npu_available, is_vescale_available
+from ..utils.import_utils import get_device_type, is_vescale_available
 from .module_utils import init_empty_weights, load_model_weights
 from .registry import get_registry
 
@@ -66,8 +66,8 @@ class HuggingfaceLoader(BaseModelLoader):
         )
 
         if weights_path is None:  # init empty model from config
-            if is_torch_npu_available() and init_device == "cuda":
-                init_device = "npu"
+            if init_device == "cuda":
+                init_device = get_device_type()
             if init_device == "meta":
                 with torch.device(init_device), no_init_weights():
                     logger.info_rank0("Init empty model on meta device from config without init_weights.")
@@ -114,8 +114,8 @@ class CustomizedModelingLoader(BaseModelLoader):
         )
 
         if weights_path is None:  # init empty model from config
-            if is_torch_npu_available() and init_device == "cuda":
-                init_device = "npu"
+            if init_device == "cuda":
+                init_device = get_device_type()
             if init_device == "meta":
                 with torch.device(init_device), no_init_weights():
                     logger.info_rank0("Init empty model on meta device from config without init_weights.")
